@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -6,6 +7,10 @@
 <title>Sistema de Inventario (CON PIN)</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<link rel="apple-touch-icon" href="http://googleusercontent.com/image_generation_content/2">
+<link rel="icon" href="http://googleusercontent.com/image_generation_content/2" sizes="192x192">
+
 <style>
 .toggle-checkbox {
 position: absolute; left: 0; margin: 0; top: 0; height: 100%;
@@ -104,10 +109,7 @@ transform: translateX(24px);
         }
     };
     
-    // Las claves ahora se manejan como variables de estado en App() para poder ser modificadas
-    // Si necesitas las claves de respaldo iniciales:
-    // ADMIN_PIN: '2025', RESET_PASSWORD: '75078248', EDITOR_PASSWORD: '24717288'
-
+    // Las claves de administración se manejan como variables de estado y se cargan desde 'datos.config'
 
     const useFirebaseData = () => {
         const [datos, setDatos] = useState(null);
@@ -277,6 +279,12 @@ transform: translateX(24px);
         const [nuevoAdminPin, setNuevoAdminPin] = useState('');
         const [nuevoResetPass, setNuevoResetPass] = useState('');
         const [nuevoEditorPass, setNuevoEditorPass] = useState('');
+
+        // 🔍 ESTADOS DE BÚSQUEDA DE MARCAS
+        const [mostrarBusquedaProd, setMostrarBusquedaProd] = useState(false);
+        const [busquedaProd, setBusquedaProd] = useState('');
+        const [mostrarBusquedaVenta, setMostrarBusquedaVenta] = useState(false);
+        const [busquedaVenta, setBusquedaVenta] = useState('');
 
         const [marcaSeleccionada, setMarcaSeleccionada] = useState('');
         const [cantidad, setCantidad] = useState('');
@@ -834,7 +842,15 @@ transform: translateX(24px);
         // Cálculos para Dashboard
         const inventarioTotal = datos ? calcularInventarioTotal() : {};
         const totalProducido = datos ? datos.trabajadores.reduce((sum, t) => sum + Object.values(t.produccion || {}).reduce((a, b) => a + b, 0), 0) : 0;
-        const totalVendido = datos ? Object.values(datos.ventas || {}).reduce((a, b) => a + b, 0) : 0;
+        const totalVendido = datos ? Object.values(datos.ventas || {}).reduce((a, b) => a + b, 0), 0) : 0;
+        
+        // 🔍 Lógica de filtrado de marcas
+        const marcasFiltradasProd = datos ? datos.marcas.filter(m =>
+            m.toLowerCase().includes(busquedaProd.toLowerCase())
+        ) : [];
+        const marcasFiltradasVenta = datos ? datos.marcas.filter(m =>
+            m.toLowerCase().includes(busquedaVenta.toLowerCase())
+        ) : [];
 
 
         // Manejo de carga y errores de Firebase
@@ -894,7 +910,6 @@ transform: translateX(24px);
                             Entrar
                         </button>
                         <div className="mt-8 pt-4 border-t border-gray-200 text-center text-sm text-gray-500">
-                            {/* 🔑 PIN de Admin Oculto */}
                             <p className="text-xs text-gray-600">Para el acceso de administrador, ingrese el PIN asignado.</p>
                             <p className="text-xs text-gray-400 mt-1">Ingresa PIN de trabajador si fue asignado</p>
                         </div>
@@ -954,7 +969,6 @@ transform: translateX(24px);
                     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
                         <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
                             <h2 className="text-2xl font-bold text-orange-600 mb-4">🔒 Acceso a Modo Editor</h2>
-                            {/* 🔑 Clave de Editor Oculta */}
                             <p className="text-gray-700 mb-4">Solo personal autorizado puede corregir registros.</p>
                             <div className="mb-6">
                                 <label className="block text-sm font-bold text-gray-700 mb-2">Contraseña:</label>
@@ -1022,16 +1036,75 @@ transform: translateX(24px);
                                 <div className="space-y-4">
                                     <div>
                                         <label className="block text-sm font-bold text-gray-700 mb-2">Marca de agua</label>
-                                        <select 
-                                            value={marcaSeleccionada}
-                                            onChange={(e) => setMarcaSeleccionada(e.target.value)}
-                                            className="w-full p-4 border-2 border-gray-300 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
-                                        >
-                                            <option value="">-- Seleccionar marca --</option>
-                                            {datos.marcas.map(m => (
-                                                <option key={m} value={m}>{m}</option>
-                                            ))}
-                                        </select>
+                                        
+                                        <div className="flex gap-2"> 
+                                            {/* Toggle Button */}
+                                            <button 
+                                                onClick={() => {
+                                                    setMostrarBusquedaProd(!mostrarBusquedaProd);
+                                                    if (mostrarBusquedaProd) {
+                                                        setBusquedaProd('');
+                                                        setMarcaSeleccionada('');
+                                                    }
+                                                }}
+                                                className={`p-4 rounded-xl font-bold transition-colors ${mostrarBusquedaProd ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                                                title={mostrarBusquedaProd ? 'Volver a lista' : 'Buscar marca'}
+                                            >
+                                                {mostrarBusquedaProd ? 'Lista' : '🔍'}
+                                            </button>
+
+                                            {/* Input/Select Condicional */}
+                                            {mostrarBusquedaProd ? (
+                                                <div className="flex-1">
+                                                    <input
+                                                        type="text"
+                                                        value={busquedaProd}
+                                                        onChange={(e) => setBusquedaProd(e.target.value)}
+                                                        placeholder="Escribe para buscar marca..."
+                                                        className="w-full p-4 border-2 border-blue-500 rounded-xl focus:outline-none text-lg"
+                                                    />
+                                                </div>
+                                            ) : (
+                                                <select 
+                                                    value={marcaSeleccionada}
+                                                    onChange={(e) => setMarcaSeleccionada(e.target.value)}
+                                                    className="flex-1 p-4 border-2 border-gray-300 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                                                >
+                                                    <option value="">-- Seleccionar marca --</option>
+                                                    {datos.marcas.map(m => (
+                                                        <option key={m} value={m}>{m}</option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                        </div>
+
+                                        {/* Dropdown de Resultados de Búsqueda (aparece solo si la búsqueda está activa) */}
+                                        {mostrarBusquedaProd && (
+                                            <div className="mt-2">
+                                                {busquedaProd.length > 0 && marcasFiltradasProd.length > 0 && (
+                                                    <div className="bg-white border border-gray-300 rounded-lg max-h-40 overflow-y-auto shadow-lg grid grid-cols-2 gap-2 p-2">
+                                                        {marcasFiltradasProd.map(m => (
+                                                            <div 
+                                                                key={m}
+                                                                onClick={() => {
+                                                                    setMarcaSeleccionada(m);
+                                                                    setBusquedaProd('');
+                                                                    setMostrarBusquedaProd(false);
+                                                                }}
+                                                                className={`p-3 cursor-pointer text-center rounded-lg font-medium transition-colors ${m === marcaSeleccionada ? 'bg-blue-600 text-white' : 'bg-blue-50 hover:bg-blue-100'}`}
+                                                            >
+                                                                {m}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {busquedaProd.length > 0 && marcasFiltradasProd.length === 0 && (
+                                                    <p className="mt-2 text-red-500 text-sm">No se encontraron marcas.</p>
+                                                )}
+                                                {busquedaProd.length === 0 && <p className="mt-2 text-gray-500 text-sm">Escribe para filtrar las marcas disponibles.</p>}
+                                            </div>
+                                        )}
+                                        <input type="hidden" value={marcaSeleccionada} />
                                     </div>
                                     <div>
                                         <label className="block text-sm font-bold text-gray-700 mb-2">Cantidad de bolsas</label>
@@ -1216,7 +1289,7 @@ transform: translateX(24px);
                         {/* 🔑 GESTIÓN DE CLAVES DE ACCESO (NUEVA SECCIÓN) */}
                         <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border-l-4 border-red-500">
                             <h2 className="text-xl font-bold text-red-700 mb-4">🔑 Gestión de Claves de Acceso</h2>
-                            <p className="text-sm text-gray-600 mb-4">Establece nuevas claves para el acceso general, reseteo y modo editor.</p>
+                            <p className="text-sm text-gray-600 mb-4">Establece nuevas claves para el acceso general, reseteo y modo editor. Las claves se actualizan directamente en Firebase.</p>
 
                             <div className="space-y-4">
                                 {/* CAMBIAR PIN DE ADMINISTRADOR */}
@@ -1680,11 +1753,51 @@ transform: translateX(24px);
                         {/* Registrar Ventas */}
                         <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
                             <h2 className="text-xl font-bold text-gray-800 mb-4">📻 Registrar Ventas del Día</h2>
+                            
+                            {/* Controles Principales (Grid 3 columnas) */}
                             <div className="grid md:grid-cols-3 gap-4">
-                                <select value={marcaVenta} onChange={(e) => setMarcaVenta(e.target.value)} className="p-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:outline-none font-medium">
-                                    <option value="">-- Seleccionar marca --</option>
-                                    {datos.marcas.map(m => <option key={m} value={m}>{m}</option>)}
-                                </select>
+                                
+                                {/* Columna 1: Selección de Marca con Búsqueda */}
+                                <div className="flex gap-2 relative"> 
+                                    {/* Toggle Button */}
+                                    <button 
+                                        onClick={() => {
+                                            setMostrarBusquedaVenta(!mostrarBusquedaVenta);
+                                            if (mostrarBusquedaVenta) {
+                                                setBusquedaVenta('');
+                                                setMarcaVenta('');
+                                            }
+                                        }}
+                                        className={`p-3 rounded-lg font-bold transition-colors ${mostrarBusquedaVenta ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                                        title={mostrarBusquedaVenta ? 'Volver a lista' : 'Buscar marca'}
+                                    >
+                                        {mostrarBusquedaVenta ? 'Lista' : '🔍'}
+                                    </button>
+                                    
+                                    {/* Input/Select Condicional */}
+                                    {mostrarBusquedaVenta ? (
+                                        <div className="flex-1">
+                                            <input
+                                                type="text"
+                                                value={busquedaVenta}
+                                                onChange={(e) => setBusquedaVenta(e.target.value)}
+                                                placeholder="Escribe para buscar marca..."
+                                                className="w-full p-3 border-2 border-red-500 rounded-lg focus:outline-none font-medium"
+                                            />
+                                        </div>
+                                    ) : (
+                                        <select 
+                                            value={marcaVenta}
+                                            onChange={(e) => setMarcaVenta(e.target.value)}
+                                            className="flex-1 p-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:outline-none font-medium"
+                                        >
+                                            <option value="">-- Seleccionar marca --</option>
+                                            {datos.marcas.map(m => <option key={m} value={m}>{m}</option>)}
+                                        </select>
+                                    )}
+                                </div>
+
+                                {/* Columna 2: Cantidad */}
                                 <input 
                                     type="number"
                                     value={cantidadVenta}
@@ -1693,6 +1806,8 @@ transform: translateX(24px);
                                     className="p-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:outline-none"
                                     onKeyPress={(e) => e.key === 'Enter' && registrarVenta()}
                                 />
+
+                                {/* Columna 3: Botón Registrar */}
                                 <button 
                                     onClick={registrarVenta}
                                     disabled={!marcaVenta || !cantidadVenta || parseInt(cantidadVenta) <= 0}
@@ -1701,6 +1816,35 @@ transform: translateX(24px);
                                     Registrar Venta
                                 </button>
                             </div>
+                            
+                            {/* Resultados de Búsqueda (Fuera del grid principal, se expande a 3 columnas) */}
+                            {mostrarBusquedaVenta && (
+                                <div className="mt-2">
+                                    {busquedaVenta.length > 0 && marcasFiltradasVenta.length > 0 && (
+                                        <div className="bg-white border border-gray-300 rounded-lg max-h-40 overflow-y-auto shadow-lg grid grid-cols-2 md:grid-cols-4 gap-2 p-2">
+                                            {marcasFiltradasVenta.map(m => (
+                                                <div 
+                                                    key={m}
+                                                    onClick={() => {
+                                                        setMarcaVenta(m);
+                                                        setBusquedaVenta('');
+                                                        setMostrarBusquedaVenta(false);
+                                                    }}
+                                                    className={`p-2 cursor-pointer text-center rounded-lg font-medium transition-colors ${m === marcaVenta ? 'bg-red-600 text-white' : 'bg-red-50 hover:bg-red-100'}`}
+                                                >
+                                                    {m}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {busquedaVenta.length > 0 && marcasFiltradasVenta.length === 0 && (
+                                        <p className="mt-2 text-red-500 text-sm">No se encontraron marcas con ese nombre.</p>
+                                    )}
+                                    {busquedaVenta.length === 0 && <p className="mt-2 text-gray-500 text-sm">Escribe para filtrar las marcas disponibles.</p>}
+
+                                </div>
+                            )}
+
                         </div>
 
                         {/* Inventario Actual por Marca */}
@@ -1810,5 +1954,4 @@ transform: translateX(24px);
         ReactDOM.render(<App />, document.getElementById('root'));
     </script>
 </body>
-
 </html>
