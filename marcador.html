@@ -1,0 +1,1814 @@
+<!DOCTYPE html>
+
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema de Inventario (CON PIN)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+.toggle-checkbox {
+position: absolute; left: 0; margin: 0; top: 0; height: 100%;
+width: 100%; opacity: 0; cursor: pointer; z-index: 10;
+}
+.toggle-label {
+position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+background-color: #e5e7eb; border-radius: 9999px; transition: background-color 0.2s;
+}
+.toggle-label:after {
+content: ''; position: absolute; top: 2px; left: 2px; width: 20px;
+height: 20px; background-color: white; border-radius: 9999px;
+transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.toggle-checkbox:checked + .toggle-label {
+background-color: #34d399;
+}
+.toggle-checkbox:checked + .toggle-label:after {
+transform: translateX(24px);
+}
+.shake { animation: shake 0.4s; }
+@keyframes shake {
+0%, 100% { transform: translateX(0); }
+20%, 60% { transform: translateX(-5px); }
+40%, 80% { transform: translateX(5px); }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="module">
+    // Claves de tu proyecto "billonario-1e402"
+    const firebaseConfig = {
+        apiKey: "AIzaSyCOekzvDJDhI5tTWGo4o1Dq96UbC5Y4Zss",
+        authDomain: "billonario-1e402.firebaseapp.com",
+        projectId: "billonario-1e402",
+        storageBucket: "billonario-1e402.firebasestorage.app",
+        messagingSenderId: "31381004585",
+        appId: "1:31381004585:web:699e9a525a482a07409738"
+    };
+
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+
+    let db, auth;
+    
+    async function initFirebaseServices() {
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            await signInAnonymously(auth);
+
+            window.firebaseDB = {
+                getDoc: (path) => getDoc(doc(db, 'inventario', path)),
+                setDoc: (path, data) => setDoc(doc(db, 'inventario', path), data),
+                onSnapshot: (path, callback) => onSnapshot(doc(db, 'inventario', path), callback)
+            };
+            return true;
+        } catch (e) {
+            console.error("Error de Firebase:", e);
+            return false;
+        }
+    }
+
+    window.firebaseInit = initFirebaseServices;
+    window.firebaseReady = true;
+    window.dispatchEvent(new Event('firebaseReady'));
+</script>
+
+<script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Datos de respaldo si Firebase falla o está vacío
+    const initialDataFallback = {
+        marcas: ['Sandy', 'Manantial', 'Aguagol', 'Ozono'],
+        valvulas: { stock: 5000 }, 
+        trabajadores: [
+            { nombre: 'Andrea', produccion: {}, deductValves: true, pin: '1234' },
+            { nombre: 'Sebastian', produccion: {}, deductValves: true, pin: '5678' }
+        ],
+        ventas: {},
+        historial: [],
+        // 🔑 Configuración inicial de claves para la primera carga
+        config: {
+            adminPin: '2025',
+            resetPass: '75078248',
+            editorPass: '24717288'
+        }
+    };
+    
+    // Las claves ahora se manejan como variables de estado en App() para poder ser modificadas
+    // Si necesitas las claves de respaldo iniciales:
+    // ADMIN_PIN: '2025', RESET_PASSWORD: '75078248', EDITOR_PASSWORD: '24717288'
+
+
+    const useFirebaseData = () => {
+        const [datos, setDatos] = useState(null);
+        const [conectado, setConectado] = useState(false);
+        const [cargando, setCargando] = useState(true);
+
+        useEffect(() => {
+            const initData = async () => {
+                if (!window.firebaseReady) {
+                    await new Promise(resolve => {
+                        window.addEventListener('firebaseReady', resolve, { once: true });
+                    });
+                }
+
+                const initSuccess = await window.firebaseInit();
+
+                if (!initSuccess) {
+                    console.error("No se pudo conectar a Firebase. Usando datos locales.");
+                    setDatos(initialDataFallback);
+                    setConectado(false);
+                    setCargando(false);
+                    return;
+                }
+
+                try {
+                    const docSnap = await window.firebaseDB.getDoc('datos');
+                    let dataToUse;
+
+                    if (docSnap.exists()) {
+                        dataToUse = docSnap.data();
+                        
+                        const updatedTrabajadores = (dataToUse.trabajadores || []).map(t => ({
+                            ...t,
+                            deductValves: t.deductValves === undefined ? true : t.deductValves,
+                            pin: t.pin || null 
+                        }));
+                        
+                        // Asegurar que la configuración de claves esté presente
+                        const config = dataToUse.config || initialDataFallback.config;
+
+                        dataToUse = {
+                            ...dataToUse,
+                            trabajadores: updatedTrabajadores,
+                            valvulas: dataToUse.valvulas || { stock: 5000 },
+                            historial: dataToUse.historial || [],
+                            config: config
+                        };
+                    } else {
+                        await window.firebaseDB.setDoc('datos', initialDataFallback);
+                        dataToUse = initialDataFallback;
+                    }
+
+                    setDatos(dataToUse);
+                    setConectado(true);
+                    setCargando(false);
+
+                    window.firebaseDB.onSnapshot('datos', (doc) => {
+                        if (doc.exists()) {
+                            setDatos(doc.data());
+                            setConectado(true);
+                        }
+                    });
+
+                } catch (error) {
+                    console.error('Error cargando datos de Firestore:', error);
+                    setDatos(initialDataFallback);
+                    setConectado(false);
+                    setCargando(false);
+                }
+            };
+
+            initData();
+        }, []);
+
+        const actualizarDatos = async (nuevosDatos) => {
+            if (!conectado) {
+                setDatos(nuevosDatos);
+                console.warn('Sin conexión. Datos solo en memoria.');
+                return;
+            }
+            
+            try {
+                await window.firebaseDB.setDoc('datos', nuevosDatos);
+            } catch (error) {
+                console.error('Error al actualizar Firebase:', error);
+                setDatos(nuevosDatos);
+            }
+        };
+
+        return { datos, actualizarDatos, conectado, cargando };
+    };
+
+    const CustomAlert = ({ show, message, type }) => {
+        if (!show) return null;
+        let bgColor = '';
+        let borderColor = '';
+        let icon = '';
+
+        switch (type) {
+            case 'success':
+                bgColor = 'bg-green-500';
+                borderColor = 'border-green-700';
+                icon = '✓';
+                break;
+            case 'error':
+                bgColor = 'bg-red-500';
+                borderColor = 'border-red-700';
+                icon = '✗';
+                break;
+            case 'info':
+            default:
+                bgColor = 'bg-blue-500';
+                borderColor = 'border-blue-700';
+                icon = 'ℹ';
+                break;
+        }
+
+        return (
+            <div className={`fixed top-4 right-4 text-white px-6 py-3 rounded-lg shadow-lg z-50 transition-all border-b-4 ${bgColor} ${borderColor}`}>
+                <span className="font-bold mr-2">{icon}</span>
+                {message}
+            </div>
+        );
+    };
+
+    const ConfirmationModal = ({ show, message, onConfirm, onCancel }) => {
+        if (!show) return null;
+
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl p-8 max-w-sm w-full shadow-2xl">
+                    <h2 className="text-xl font-bold text-gray-800 mb-4">Confirmación Requerida</h2>
+                    <p className="text-gray-700 mb-6">{message}</p>
+                    <div className="flex gap-4">
+                        <button 
+                            onClick={onCancel}
+                            className="flex-1 bg-gray-300 text-gray-800 py-3 rounded-lg font-bold hover:bg-gray-400"
+                        >
+                            Cancelar
+                        </button>
+                        <button 
+                            onClick={onConfirm}
+                            className="flex-1 bg-red-600 text-white py-3 rounded-lg font-bold hover:bg-red-700"
+                        >
+                            Confirmar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    function App() {
+        const { datos, actualizarDatos, conectado, cargando } = useFirebaseData();
+        const [vista, setVista] = useState('acceso'); 
+        const [trabajadorActual, setTrabajadorActual] = useState(null); 
+        const [pinCorrecto, setPinCorrecto] = useState(false); 
+        const [pinIngresado, setPinIngresado] = useState('');
+        const [shake, setShake] = useState(false); 
+
+        // 🔑 CLAVES ADMINISTRABLES - Se inicializan con los datos de Firebase o fallback
+        const [adminPin, setAdminPin] = useState(initialDataFallback.config.adminPin);
+        const [resetPass, setResetPass] = useState(initialDataFallback.config.resetPass);
+        const [editorPass, setEditorPass] = useState(initialDataFallback.config.editorPass);
+
+        // Inputs para el cambio de claves
+        const [nuevoAdminPin, setNuevoAdminPin] = useState('');
+        const [nuevoResetPass, setNuevoResetPass] = useState('');
+        const [nuevoEditorPass, setNuevoEditorPass] = useState('');
+
+        const [marcaSeleccionada, setMarcaSeleccionada] = useState('');
+        const [cantidad, setCantidad] = useState('');
+        const [marcaVenta, setMarcaVenta] = useState('');
+        const [cantidadVenta, setCantidadVenta] = useState('');
+        const [nuevoTrabajador, setNuevoTrabajador] = useState('');
+        const [nuevaMarca, setNuevaMarca] = useState('');
+        const [mensajeAlerta, setMensajeAlerta] = useState({ show: false, message: '', type: 'info' });
+        const [fechaFiltro, setFechaFiltro] = useState(new Date().toISOString().split('T')[0]);
+        const [mostrarModalReset, setMostrarModalReset] = useState(false);
+        const [mostrarModalEditor, setMostrarModalEditor] = useState(false);
+        const [claveReset, setClaveReset] = useState('');
+        const [claveEditor, setClaveEditor] = useState('');
+        const [editandoTrabajador, setEditandoTrabajador] = useState(null);
+        const [editandoMarca, setEditandoMarca] = useState(null);
+        const [nombreEditado, setNombreEditado] = useState('');
+        const [modoEditor, setModoEditor] = useState(false);
+        const [movimientoAEditar, setMovimientoAEditar] = useState(null);
+        const [nuevaCantidadEdicion, setNuevaCantidadEdicion] = useState('');
+        const [confirmacion, setConfirmacion] = useState(null); 
+        const [newValveStock, setNewValveStock] = useState('5000'); 
+        
+        const mostrarAlerta = (message, type = 'info') => {
+            setMensajeAlerta({ show: true, message, type });
+            setTimeout(() => setMensajeAlerta({ show: false, message: '', type: 'info' }), 3000);
+        };
+
+        useEffect(() => {
+            if (datos && datos.valvulas && datos.valvulas.stock !== undefined) {
+                setNewValveStock(datos.valvulas.stock.toString());
+            }
+            // 🔑 Cargar las claves cuando los datos de Firebase estén listos
+            if (datos && datos.config) {
+                setAdminPin(datos.config.adminPin || initialDataFallback.config.adminPin);
+                setResetPass(datos.config.resetPass || initialDataFallback.config.resetPass);
+                setEditorPass(datos.config.editorPass || initialDataFallback.config.editorPass);
+            }
+        }, [datos]);
+
+        // Función para actualizar las claves de administración en Firebase
+        const actualizarConfiguracion = (nuevaConfig) => {
+            const nuevosDatos = {
+                ...datos,
+                config: {
+                    adminPin: nuevaConfig.adminPin !== undefined ? nuevaConfig.adminPin : adminPin,
+                    resetPass: nuevaConfig.resetPass !== undefined ? nuevaConfig.resetPass : resetPass,
+                    editorPass: nuevaConfig.editorPass !== undefined ? nuevaConfig.editorPass : editorPass
+                }
+            };
+            
+            actualizarDatos(nuevosDatos);
+            // El useEffect de arriba actualizará el estado local (adminPin, resetPass, editorPass)
+            mostrarAlerta('Configuración de claves actualizada', 'success');
+        };
+
+        // Lógica de Acceso por PIN
+        const verificarAcceso = () => {
+            const pin = pinIngresado.trim();
+            if (!pin || isNaN(pin)) {
+                setShake(true);
+                setTimeout(() => setShake(false), 400);
+                mostrarAlerta('✗ Ingrese un PIN válido', 'error');
+                return;
+            }
+
+            // 1. PIN de Administrador (Usa el estado actual)
+            if (pin === adminPin) {
+                setPinCorrecto(true);
+                setTrabajadorActual({ nombre: 'Administrador' }); 
+                setVista('admin');
+                setPinIngresado('');
+                mostrarAlerta('Bienvenido, Administrador', 'success');
+                return;
+            }
+
+            // 2. PIN de Trabajador
+            const trabajadorEncontrado = datos.trabajadores.find(t => t.pin === pin && t.pin !== null);
+            if (trabajadorEncontrado) {
+                setPinCorrecto(true);
+                setTrabajadorActual(trabajadorEncontrado);
+                setVista('trabajador');
+                setPinIngresado('');
+                mostrarAlerta(`Bienvenido, ${trabajadorEncontrado.nombre}`, 'success');
+                return;
+            }
+
+            // 3. PIN Incorrecto
+            setShake(true);
+            setTimeout(() => setShake(false), 400);
+            mostrarAlerta('✗ PIN o código incorrecto', 'error');
+            setPinIngresado('');
+        };
+
+        // Función de cierre de sesión
+        const cerrarSesion = () => {
+            setPinCorrecto(false);
+            setTrabajadorActual(null);
+            setPinIngresado('');
+            setVista('acceso');
+            setModoEditor(false);
+            mostrarAlerta('Sesión cerrada', 'info');
+        };
+
+        // Funciones de Cálculo y Utilidad
+        const calcularInventarioTotal = () => {
+            if (!datos) return {};
+            const inventario = {};
+            datos.marcas.forEach(marca => { inventario[marca] = 0; });
+            
+            datos.trabajadores.forEach(trabajador => {
+                Object.entries(trabajador.produccion || {}).forEach(([marca, cant]) => {
+                    inventario[marca] = (inventario[marca] || 0) + (cant || 0);
+                });
+            });
+
+            Object.entries(datos.ventas || {}).forEach(([marca, cant]) => {
+                inventario[marca] = (inventario[marca] || 0) - (cant || 0);
+            });
+            return inventario;
+        };
+
+        const formatearFecha = (fecha) => {
+            const d = new Date(fecha);
+            return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        };
+
+        // Continuación de la lógica (Reset Diario)
+        const resetearProduccionDiaria = () => {
+            if (claveReset !== resetPass) { // Usa la clave de estado
+                mostrarAlerta('✗ Contraseña incorrecta', 'error');
+                return;
+            }
+
+            const nuevosTrabajadores = datos.trabajadores.map(t => ({
+                ...t,
+                produccion: {}
+            }));
+            
+            const registroReset = {
+                id: Date.now(),
+                fecha: new Date().toISOString(),
+                tipo: 'reset',
+                descripcion: 'Reset de producción diaria y ventas'
+            };
+
+            actualizarDatos({
+                ...datos,
+                trabajadores: nuevosTrabajadores,
+                ventas: {}, // Se resetean las ventas del día
+                historial: [...(datos.historial || []), registroReset]
+            });
+            
+            setMostrarModalReset(false);
+            setClaveReset('');
+            mostrarAlerta('Producción reseteada exitosamente', 'success');
+        };
+
+        // Continuación de la lógica (Modo Editor)
+        const activarModoEditor = () => {
+            if (claveEditor !== editorPass) { // Usa la clave de estado
+                mostrarAlerta('✗ Contraseña incorrecta', 'error');
+                return;
+            }
+
+            setModoEditor(true);
+            setMostrarModalEditor(false);
+            setClaveEditor('');
+            setVista('editor'); 
+            mostrarAlerta('Modo editor activado', 'success');
+        };
+
+        // Edición de Movimientos
+        const editarMovimiento = () => {
+            if (!movimientoAEditar || !nuevaCantidadEdicion || isNaN(parseInt(nuevaCantidadEdicion))) {
+                mostrarAlerta('✗ Datos de edición incompletos o inválidos', 'error');
+                return;
+            }
+
+            const nuevaCantidad = parseInt(nuevaCantidadEdicion);
+            const cantidadOriginal = movimientoAEditar.cantidad;
+            const diferencia = nuevaCantidad - cantidadOriginal; 
+            const historialBase = datos.historial || [];
+
+            let nuevosTrabajadores = JSON.parse(JSON.stringify(datos.trabajadores)); 
+            let nuevasVentas = { ...datos.ventas };
+            let nuevoStockValvulas = datos.valvulas.stock; 
+            
+            const nuevoHistorial = historialBase.map(item => {
+                if (item.id === movimientoAEditar.id) {
+                    return { ...item, cantidad: nuevaCantidad, editado: true };
+                }
+                return item;
+            });
+
+            if (movimientoAEditar.tipo === 'produccion') {
+                const trabajador = nuevosTrabajadores.find(t => t.nombre === movimientoAEditar.trabajador);
+                if (trabajador) {
+                    trabajador.produccion[movimientoAEditar.marca] = 
+                        (trabajador.produccion[movimientoAEditar.marca] || 0) + diferencia;
+
+                    if (movimientoAEditar.deductValves) { 
+                        nuevoStockValvulas -= diferencia; 
+                    }
+                }
+            } else if (movimientoAEditar.tipo === 'venta') {
+                nuevasVentas[movimientoAEditar.marca] = 
+                    (nuevasVentas[movimientoAEditar.marca] || 0) + diferencia;
+            }
+
+            const registroEdicion = {
+                id: Date.now(),
+                fecha: new Date().toISOString(),
+                tipo: 'edicion',
+                descripcion: `Edición de ${movimientoAEditar.tipo} para ${movimientoAEditar.marca} por diferencia de ${diferencia} bolsas.`,
+                movimientoOriginal: { ...movimientoAEditar, cantidad: cantidadOriginal },
+                nuevaCantidad: nuevaCantidad
+            };
+
+            actualizarDatos({
+                ...datos,
+                trabajadores: nuevosTrabajadores,
+                ventas: nuevasVentas,
+                valvulas: { stock: nuevoStockValvulas }, 
+                historial: [...nuevoHistorial, registroEdicion]
+            });
+
+            setMovimientoAEditar(null);
+            setNuevaCantidadEdicion('');
+            mostrarAlerta('Movimiento editado exitosamente. Inventario recalculado.', 'success');
+        };
+
+        // Exportación a Excel
+        const exportarAExcel = () => {
+            const wb = XLSX.utils.book_new();
+            const inventarioTotal = calcularInventarioTotal();
+
+            // Pestaña 1: Inventario Actual
+            const wsInventario = [];
+            wsInventario.push(['INVENTARIO ACTUAL']);
+            wsInventario.push(['Marca', 'Cantidad Disponible']);
+            datos.marcas.forEach(marca => {
+                wsInventario.push([marca, inventarioTotal[marca] || 0]);
+            });
+            wsInventario.push(['STOCK DE VÁLVULAS', datos.valvulas.stock]); 
+            wsInventario.push([]);
+            wsInventario.push(['TOTAL BOLSAS INVENTARIO:', `=SUM(B3:B${2 + datos.marcas.length})`]);
+
+            const ws1 = XLSX.utils.aoa_to_sheet(wsInventario);
+            ws1['!cols'] = [{wch: 25}, {wch: 20}];
+            XLSX.utils.book_append_sheet(wb, ws1, 'Inventario Actual');
+
+            // Pestaña 2: Producción
+            const wsProduccion = [];
+            wsProduccion.push(['PRODUCCIÓN POR TRABAJADOR']);
+            wsProduccion.push(['Trabajador', 'Marca', 'Cantidad', 'Resta Válvulas']); 
+            datos.trabajadores.forEach(trabajador => {
+                Object.entries(trabajador.produccion || {}).forEach(([marca, cant]) => {
+                    wsProduccion.push([trabajador.nombre, marca, cant, trabajador.deductValves ? 'SI' : 'NO']);
+                });
+            });
+            wsProduccion.push([]);
+            wsProduccion.push(['TOTAL PRODUCIDO:', '', `=SUM(C3:C${2 + wsProduccion.length - 4})`]);
+
+            const ws2 = XLSX.utils.aoa_to_sheet(wsProduccion);
+            ws2['!cols'] = [{wch: 20}, {wch: 20}, {wch: 15}, {wch: 20}]; 
+            XLSX.utils.book_append_sheet(wb, ws2, 'Producción');
+            
+            // Pestaña 3: Ventas
+            const wsVentas = [];
+            wsVentas.push(['VENTAS DEL DÍA']);
+            wsVentas.push(['Marca', 'Cantidad Vendida']);
+            Object.entries(datos.ventas || {}).forEach(([marca, cant]) => {
+                wsVentas.push([marca, cant]);
+            });
+            wsVentas.push([]);
+            wsVentas.push(['TOTAL VENDIDO:', `=SUM(B3:B${2 + Object.keys(datos.ventas || {}).length})`]);
+
+            const ws3 = XLSX.utils.aoa_to_sheet(wsVentas);
+            ws3['!cols'] = [{wch: 20}, {wch: 20}];
+            XLSX.utils.book_append_sheet(wb, ws3, 'Ventas');
+
+            // Pestaña 4: Historial Completo
+            const wsHistorial = [];
+            wsHistorial.push(['HISTORIAL DE MOVIMIENTOS']);
+            wsHistorial.push(['Fecha', 'Tipo', 'Trabajador', 'Marca', 'Cantidad', 'Resta Válvulas', 'ID', 'Editado']); 
+            (datos.historial || []).forEach(item => {
+                const fecha = new Date(item.fecha).toLocaleString('es-ES');
+                const tipo = item.tipo === 'produccion' ? 'Producción' : item.tipo === 'venta' ? 'Venta' : item.tipo === 'edicion' ? 'Edición' : 'Reset';
+                wsHistorial.push([
+                    fecha,
+                    tipo,
+                    item.trabajador || '-',
+                    item.marca || '-',
+                    item.cantidad || '-',
+                    item.deductValves ? 'SI' : 'NO', 
+                    item.id || '-',
+                    item.editado ? 'SI' : 'NO'
+                ]);
+            });
+
+            const ws4 = XLSX.utils.aoa_to_sheet(wsHistorial);
+            ws4['!cols'] = [{wch: 25}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 15}, {wch: 25}, {wch: 15}, {wch: 10}];
+            XLSX.utils.book_append_sheet(wb, ws4, 'Historial');
+
+            XLSX.writeFile(wb, `Inventario_${new Date().toISOString().split('T')[0]}.xlsx`);
+            mostrarAlerta('Excel exportado exitosamente', 'success');
+        };
+        
+        // Gestión de Trabajadores
+        const agregarTrabajador = (pinNuevo = '') => {
+            const nombre = nuevoTrabajador.trim();
+            if (!nombre) {
+                mostrarAlerta('El nombre no puede estar vacío', 'error');
+                return;
+            }
+            if (datos.trabajadores.find(t => t.nombre === nombre)) {
+                mostrarAlerta('El trabajador ya existe', 'error');
+                return;
+            }
+            
+            const pinValido = pinNuevo.length >= 4 ? pinNuevo : null;
+
+            actualizarDatos({
+                ...datos,
+                trabajadores: [...datos.trabajadores, { nombre, produccion: {}, deductValves: true, pin: pinValido }] 
+            });
+            setNuevoTrabajador('');
+            mostrarAlerta('Trabajador agregado exitosamente', 'success');
+        };
+
+        const eliminarTrabajador = (nombre) => {
+            setConfirmacion({
+                show: true,
+                message: `¿Estás seguro de eliminar a ${nombre}? Se perderá toda su producción.`,
+                onConfirm: () => {
+                    actualizarDatos({
+                        ...datos,
+                        trabajadores: datos.trabajadores.filter(t => t.nombre !== nombre)
+                    });
+                    mostrarAlerta('Trabajador eliminado', 'success');
+                    setConfirmacion(null);
+                },
+                onCancel: () => setConfirmacion(null)
+            });
+        };
+
+        const editarTrabajador = (nombreViejo, nuevoNombre, nuevoPin) => {
+            if (!nuevoNombre.trim()) {
+                mostrarAlerta('El nombre no puede estar vacío', 'error');
+                return;
+            }
+            
+            if (nuevoPin && (nuevoPin.length < 4 || isNaN(parseInt(nuevoPin)))) {
+                mostrarAlerta('El PIN debe ser un número de al menos 4 dígitos', 'error');
+                return;
+            }
+            const pinAAsignar = nuevoPin.length >= 4 ? nuevoPin : null;
+
+            const nuevosTrabajadores = datos.trabajadores.map(t => 
+                t.nombre === nombreViejo ? { 
+                    ...t, 
+                    nombre: nuevoNombre,
+                    pin: pinAAsignar 
+                } : t
+            );
+
+            actualizarDatos({ ...datos, trabajadores: nuevosTrabajadores });
+            setEditandoTrabajador(null);
+            setNombreEditado('');
+            mostrarAlerta('Datos de trabajador actualizados', 'success');
+        };
+        
+        // Gestión de Marcas
+        const agregarMarca = () => {
+            const marca = nuevaMarca.trim();
+            if (marca && !datos.marcas.includes(marca)) {
+                actualizarDatos({
+                    ...datos,
+                    marcas: [...datos.marcas, marca]
+                });
+                setNuevaMarca('');
+                mostrarAlerta('Marca agregada exitosamente', 'success');
+            } else if (datos.marcas.includes(marca)) {
+                mostrarAlerta('La marca ya existe', 'error');
+            }
+        };
+
+        const eliminarMarca = (marca) => {
+            setConfirmacion({
+                show: true,
+                message: `¿Estás seguro de eliminar la marca ${marca}? Esto afectará el historial.`,
+                onConfirm: () => {
+                    actualizarDatos({
+                        ...datos,
+                        marcas: datos.marcas.filter(m => m !== marca)
+                    });
+                    mostrarAlerta('Marca eliminada', 'success');
+                    setConfirmacion(null);
+                },
+                onCancel: () => setConfirmacion(null)
+            });
+        };
+
+        const editarMarca = (marcaVieja, marcaNueva) => {
+            if (marcaNueva.trim() && marcaNueva !== marcaVieja) {
+                const nuevasMarcas = datos.marcas.map(m => m === marcaVieja ? marcaNueva : m);
+                actualizarDatos({
+                    ...datos,
+                    marcas: nuevasMarcas
+                });
+                setEditandoMarca(null);
+                setNombreEditado('');
+                mostrarAlerta('Marca actualizada', 'success');
+            }
+        };
+        
+        // Registro de Producción
+        const agregarProduccion = (trabajador, marca, cant) => {
+            if (trabajador && marca && cant) {
+                const cantidadInt = parseInt(cant);
+                if (cantidadInt <= 0 || isNaN(cantidadInt)) {
+                    mostrarAlerta('La cantidad debe ser un número positivo', 'error');
+                    return;
+                }
+
+                let deductionApplied = false;
+                let nuevoStockValvulas = datos.valvulas.stock; 
+                let mensajeNotificacion = `Producción de ${trabajador} registrada`;
+
+                const nuevosTrabajadores = datos.trabajadores.map(t => {
+                    if (t.nombre === trabajador) {
+                        if (t.deductValves) { 
+                            deductionApplied = true;
+                            nuevoStockValvulas -= cantidadInt; 
+                            mensajeNotificacion += ` (${cantidadInt} válvulas restadas)`;
+                        } else {
+                            mensajeNotificacion += ' (válvulas no afectadas)';
+                        }
+
+                        return {
+                            ...t,
+                            produccion: {
+                                ...(t.produccion || {}),
+                                [marca]: ((t.produccion || {})[marca] || 0) + cantidadInt
+                            }
+                        };
+                    }
+                    return t;
+                });
+                
+                const nuevoHistorial = [...(datos.historial || []), {
+                    id: Date.now(),
+                    fecha: new Date().toISOString(),
+                    tipo: 'produccion',
+                    trabajador: trabajador,
+                    marca: marca,
+                    cantidad: cantidadInt,
+                    deductValves: deductionApplied, 
+                    editado: false
+                }];
+
+                actualizarDatos({
+                    ...datos,
+                    trabajadores: nuevosTrabajadores,
+                    valvulas: { stock: nuevoStockValvulas }, 
+                    historial: nuevoHistorial
+                });
+
+                setCantidad('');
+                setMarcaSeleccionada('');
+                mostrarAlerta(mensajeNotificacion, 'success');
+            }
+        };
+
+        // Registro de Venta
+        const registrarVenta = () => {
+            if (marcaVenta && cantidadVenta) {
+                const inventarioTotal = calcularInventarioTotal();
+                const stockDisponible = inventarioTotal[marcaVenta] || 0;
+                const cantidadAVender = parseInt(cantidadVenta);
+                
+                if (cantidadAVender <= 0 || isNaN(cantidadAVender)) {
+                    mostrarAlerta('La cantidad debe ser un número positivo', 'error');
+                    return;
+                }
+
+                if (stockDisponible < cantidadAVender) {
+                    mostrarAlerta(
+                        `STOCK INSUFICIENTE. Disponible: ${stockDisponible} bolsas. Faltan: ${cantidadAVender - stockDisponible}`,
+                        'error'
+                    );
+                    return;
+                }
+                
+                const nuevasVentas = {
+                    ...(datos.ventas || {}),
+                    [marcaVenta]: ((datos.ventas || {})[marcaVenta] || 0) + cantidadAVender
+                };
+                const nuevoHistorial = [...(datos.historial || []), {
+                    id: Date.now(),
+                    fecha: new Date().toISOString(),
+                    tipo: 'venta',
+                    marca: marcaVenta,
+                    cantidad: cantidadAVender,
+                    deductValves: false,
+                    editado: false
+                }];
+                actualizarDatos({
+                    ...datos,
+                    ventas: nuevasVentas,
+                    historial: nuevoHistorial
+                });
+                setCantidadVenta('');
+                setMarcaVenta('');
+                mostrarAlerta('Venta registrada exitosamente', 'success');
+            }
+        };
+
+        // Gestión de Válvulas
+        const toggleDeductValves = (nombre) => {
+            const nuevosTrabajadores = datos.trabajadores.map(t =>
+                t.nombre === nombre ? { ...t, deductValves: !t.deductValves } : t
+            );
+            actualizarDatos({
+                ...datos,
+                trabajadores: nuevosTrabajadores
+            });
+            mostrarAlerta(`Configuración de ${nombre} actualizada`, 'info');
+        };
+
+        const updateValveStock = () => {
+            const stockInt = parseInt(newValveStock);
+            if (isNaN(stockInt) || stockInt < 0) {
+                mostrarAlerta('Ingrese una cantidad válida para el stock de válvulas', 'error');
+                return;
+            }
+
+            actualizarDatos({
+                ...datos,
+                valvulas: { stock: stockInt }
+            });
+            mostrarAlerta(`Stock de válvulas actualizado a ${stockInt.toLocaleString()}`, 'success');
+        };
+
+        // Filtro de Historial
+        const filtrarHistorialPorFecha = () => {
+            const historialBase = (datos.historial || []).filter(item => item.tipo !== 'edicion');
+            if (!fechaFiltro) return historialBase;
+            return historialBase.filter(item => {
+                const fechaItem = new Date(item.fecha).toISOString().split('T')[0];
+                return fechaItem === fechaFiltro;
+            });
+        };
+
+        // Cálculos para Dashboard
+        const inventarioTotal = datos ? calcularInventarioTotal() : {};
+        const totalProducido = datos ? datos.trabajadores.reduce((sum, t) => sum + Object.values(t.produccion || {}).reduce((a, b) => a + b, 0), 0) : 0;
+        const totalVendido = datos ? Object.values(datos.ventas || {}).reduce((a, b) => a + b, 0) : 0;
+
+
+        // Manejo de carga y errores de Firebase
+        if (cargando) {
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+                    <div className="text-center">
+                        <div className="animate-spin rounded-full h-20 w-20 border-b-4 border-blue-600 mx-auto mb-4"></div>
+                        <p className="text-2xl font-bold text-gray-700">Cargando sistema...</p>
+                    </div>
+                </div>
+            );
+        }
+
+        if (!datos || !conectado) {
+            return (
+                <div className="min-h-screen bg-red-50 flex items-center justify-center p-4">
+                    <div className="bg-white p-8 rounded-lg shadow-lg max-w-md">
+                        <h2 className="text-2xl font-bold text-red-600 mb-4">⚠ Error de Conexión</h2>
+                        <p className="text-gray-700 mb-4">Error al cargar la aplicación o al conectar con Firebase. Por favor, revisa tu conexión y configuración.</p>
+                        <button onClick={() => window.location.reload()} className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
+                            Reintentar
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+        
+        // VISTA: PANTALLA DE ACCESO POR PIN (INICIO)
+        if (!pinCorrecto || vista === 'acceso') {
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-100 flex items-center justify-center p-4">
+                    <CustomAlert {...mensajeAlerta} />
+                    <div className={`bg-white rounded-2xl p-10 max-w-md w-full shadow-2xl ${shake ? 'shake' : ''}`}>
+                        <div className="text-center mb-8">
+                            <span className="text-5xl mb-4 block">🔒</span>
+                            <h1 className="text-3xl font-extrabold text-gray-900">Acceso al Sistema</h1>
+                            <p className="text-gray-600 mt-2">Ingresa tu PIN para continuar.</p>
+                        </div>
+                        
+                        <div className="mb-6">
+                            <input
+                                type="password"
+                                value={pinIngresado}
+                                onChange={(e) => setPinIngresado(e.target.value)}
+                                placeholder="PIN (4+ dígitos)"
+                                maxLength="10"
+                                className="w-full p-4 text-center text-2xl font-mono tracking-widest border-2 border-gray-300 rounded-xl focus:border-blue-500 focus:outline-none"
+                                onKeyPress={(e) => e.key === 'Enter' && verificarAcceso()}
+                                autocomplete="off" 
+                            />
+                        </div>
+                        <button 
+                            onClick={verificarAcceso}
+                            className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold hover:bg-blue-700 transition-all text-lg shadow-lg"
+                        >
+                            Entrar
+                        </button>
+                        <div className="mt-8 pt-4 border-t border-gray-200 text-center text-sm text-gray-500">
+                            {/* 🔑 PIN de Admin Oculto */}
+                            <p className="text-xs text-gray-600">Para el acceso de administrador, ingrese el PIN asignado.</p>
+                            <p className="text-xs text-gray-400 mt-1">Ingresa PIN de trabajador si fue asignado</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        // VISTAS RESTANTES (ADMIN, TRABAJADOR, CONFIG, CALENDARIO, EDITOR)
+        
+        const renderModals = () => (
+            <>
+            {/* Modales de Reset, Editor, Excel, y Confirmación (implementados en las partes anteriores) */}
+                {/* Modal de Reset Diario */}
+                {mostrarModalReset && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                        <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
+                            <h2 className="text-2xl font-bold text-red-600 mb-4">🔒 Reset de Producción</h2>
+                            <p className="text-gray-700 mb-4">¿Estás seguro de borrar toda la producción y ventas del día?</p>
+                            <div className="bg-yellow-50 border-l-4 border-yellow-500 p-4 mb-4">
+                                <p className="text-sm font-semibold text-yellow-800">⚠️ Esta acción no se puede deshacer</p>
+                            </div>
+                            <div className="mb-6">
+                                <label className="block text-sm font-bold text-gray-700 mb-2">Contraseña:</label>
+                                <input
+                                    type="password"
+                                    value={claveReset}
+                                    onChange={(e) => setClaveReset(e.target.value)}
+                                    placeholder="Contraseña requerida"
+                                    className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:outline-none"
+                                    onKeyPress={(e) => e.key === 'Enter' && resetearProduccionDiaria()}
+                                />
+                            </div>
+                            <div className="flex gap-4">
+                                <button 
+                                    onClick={() => {
+                                        setMostrarModalReset(false);
+                                        setClaveReset('');
+                                    }}
+                                    className="flex-1 bg-gray-200 text-gray-800 py-3 rounded-lg font-bold hover:bg-gray-300"
+                                >
+                                    Cancelar
+                                </button>
+                                <button 
+                                    onClick={resetearProduccionDiaria}
+                                    className="flex-1 bg-red-600 text-white py-3 rounded-lg font-bold hover:bg-red-700"
+                                >
+                                    🔄 Resetear
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {/* Modal de Acceso a Modo Editor */}
+                {mostrarModalEditor && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                        <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
+                            <h2 className="text-2xl font-bold text-orange-600 mb-4">🔒 Acceso a Modo Editor</h2>
+                            {/* 🔑 Clave de Editor Oculta */}
+                            <p className="text-gray-700 mb-4">Solo personal autorizado puede corregir registros.</p>
+                            <div className="mb-6">
+                                <label className="block text-sm font-bold text-gray-700 mb-2">Contraseña:</label>
+                                <input
+                                    type="password"
+                                    value={claveEditor}
+                                    onChange={(e) => setClaveEditor(e.target.value)}
+                                    placeholder="Contraseña requerida"
+                                    className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-orange-500 focus:outline-none"
+                                    onKeyPress={(e) => e.key === 'Enter' && activarModoEditor()}
+                                />
+                            </div>
+                            <div className="flex gap-4">
+                                <button 
+                                    onClick={() => {
+                                        setMostrarModalEditor(false);
+                                        setClaveEditor('');
+                                    }}
+                                    className="flex-1 bg-gray-200 text-gray-800 py-3 rounded-lg font-bold hover:bg-gray-300"
+                                >
+                                    Cancelar
+                                </button>
+                                <button 
+                                    onClick={activarModoEditor}
+                                    className="flex-1 bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700"
+                                >
+                                    ✏️ Entrar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </>
+        );
+
+        // VISTA: TRABAJADOR
+        if (vista === 'trabajador') {
+            const trabajadorData = datos.trabajadores.find(t => t.nombre === trabajadorActual.nombre);
+            
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 p-4">
+                    <CustomAlert {...mensajeAlerta} />
+                    <div className="max-w-2xl mx-auto">
+                        <div className="bg-white rounded-2xl shadow-xl p-6 mb-4">
+                            <div className="flex items-center justify-between mb-4">
+                                <h1 className="text-2xl font-bold text-gray-800">📝 Registro de Producción</h1>
+                                <div className={`flex items-center gap-2 ${conectado ? 'text-green-600' : 'text-red-600'}`}>
+                                    <div className="w-3 h-3 rounded-full bg-current animate-pulse"></div>
+                                    <span className="text-sm font-semibold">{conectado ? 'Online' : 'Offline'}</span>
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <div className="flex justify-between items-center mb-6 bg-blue-50 p-4 rounded-lg">
+                                    <h2 className="text-xl font-bold text-blue-800">👋 Hola, {trabajadorActual.nombre}</h2>
+                                    <button onClick={cerrarSesion} className="text-red-600 hover:text-red-800 font-semibold text-sm">
+                                        🔒 Cerrar Sesión
+                                    </button>
+                                </div>
+                                {trabajadorData && (
+                                    <div className="bg-yellow-50 p-3 rounded-lg border-l-4 border-yellow-500 mb-4">
+                                        <p className="text-sm font-semibold text-yellow-800">Control de Válvulas: <span className={`font-bold ${trabajadorData.deductValves ? 'text-emerald-600' : 'text-red-600'}`}>{trabajadorData.deductValves ? 'ACTIVADO' : 'DESACTIVADO'}</span></p>
+                                    </div>
+                                )}
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">Marca de agua</label>
+                                        <select 
+                                            value={marcaSeleccionada}
+                                            onChange={(e) => setMarcaSeleccionada(e.target.value)}
+                                            className="w-full p-4 border-2 border-gray-300 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                                        >
+                                            <option value="">-- Seleccionar marca --</option>
+                                            {datos.marcas.map(m => (
+                                                <option key={m} value={m}>{m}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">Cantidad de bolsas</label>
+                                        <input 
+                                            type="number"
+                                            value={cantidad}
+                                            onChange={(e) => setCantidad(e.target.value)}
+                                            placeholder="Ejemplo: 500"
+                                            className="w-full p-4 border-2 border-gray-300 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                                            onKeyPress={(e) => e.key === 'Enter' && agregarProduccion(trabajadorActual.nombre, marcaSeleccionada, cantidad)}
+                                        />
+                                    </div>
+                                    <button 
+                                        onClick={() => agregarProduccion(trabajadorActual.nombre, marcaSeleccionada, cantidad)}
+                                        disabled={!marcaSeleccionada || !cantidad || parseInt(cantidad) <= 0}
+                                        className="w-full bg-green-600 text-white py-4 rounded-xl font-bold hover:bg-green-700 transition-all text-lg shadow-lg disabled:bg-gray-400"
+                                    >
+                                        ✓ Registrar Producción
+                                    </button>
+                                </div>
+                                <div className="mt-6 pt-6 border-t-2">
+                                    <h3 className="font-bold text-gray-800 mb-3 text-lg">📊 Tu producción de hoy:</h3>
+                                    <div className="space-y-2">
+                                        {Object.entries(trabajadorData?.produccion || {}).map(([marca, cant]) => (
+                                            <div key={marca} className="flex justify-between bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border-l-4 border-blue-500">
+                                                <span className="font-semibold">{marca}</span>
+                                                <span className="font-bold text-blue-700 text-lg">{cant} bolsas</span>
+                                            </div>
+                                        ))}
+                                        {Object.keys(trabajadorData?.produccion || {}).length === 0 && (
+                                            <p className="text-gray-500 text-center py-4">Aún no has registrado producción</p>
+                                        )}
+                                    </div>
+                                </div>
+                                <button onClick={() => setVista('admin')} className="mt-6 w-full bg-gray-600 text-white py-3 rounded-xl font-bold hover:bg-gray-700 shadow-lg">
+                                    🏠 Volver al Panel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        // VISTA: CALENDARIO
+        if (vista === 'calendario') {
+            const historialFiltrado = filtrarHistorialPorFecha();
+            const produccionDelDia = historialFiltrado.filter(h => h.tipo === 'produccion');
+            const ventasDelDia = historialFiltrado.filter(h => h.tipo === 'venta');
+            
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-orange-50 to-yellow-100 p-4">
+                    <CustomAlert {...mensajeAlerta} />
+                    <div className="max-w-6xl mx-auto">
+                        <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
+                            <h1 className="text-3xl font-bold text-gray-800 mb-4">📅 Historial por Fecha</h1>
+                            <div className="flex flex-col md:flex-row gap-4 items-center">
+                                <label className="font-semibold text-gray-700">Seleccionar fecha:</label>
+                                <input 
+                                    type="date"
+                                    value={fechaFiltro}
+                                    onChange={(e) => setFechaFiltro(e.target.value)}
+                                    max={new Date().toISOString().split('T')[0]}
+                                    className="p-3 border-2 border-gray-300 rounded-lg text-lg font-medium"
+                                />
+                                <button onClick={() => setVista('admin')} className="md:ml-auto bg-gray-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-gray-700">
+                                    🏠 Volver
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid md:grid-cols-2 gap-6 mb-6">
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <h2 className="text-xl font-bold text-green-700 mb-4">✓ Producción del día</h2>
+                                {produccionDelDia.length > 0 ? (
+                                    <div className="space-y-2">
+                                        {produccionDelDia.map((item, idx) => (
+                                            <div key={idx} className="bg-green-50 p-4 rounded-lg border-l-4 border-green-500">
+                                                <p className="font-bold">{item.trabajador} - {item.marca}</p>
+                                                <p className="text-2xl font-bold text-green-700">{item.cantidad} bolsas</p>
+                                                <p className="text-sm text-gray-500">{formatearFecha(item.fecha)}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-gray-500 text-center py-8">No hay producción registrada este día</p>
+                                )}
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <h2 className="text-xl font-bold text-red-700 mb-4">✗ Ventas del día</h2>
+                                {ventasDelDia.length > 0 ? (
+                                    <div className="space-y-2">
+                                        {ventasDelDia.map((item, idx) => (
+                                            <div key={idx} className="bg-red-50 p-4 rounded-lg border-l-4 border-red-500">
+                                                <p className="font-bold">{item.marca}</p>
+                                                <p className="text-2xl font-bold text-red-700">{item.cantidad} bolsas</p>
+                                                <p className="text-sm text-gray-500">{formatearFecha(item.fecha)}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-gray-500 text-center py-8">No hay ventas registradas este día</p>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">Resumen del día</h2>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="bg-blue-50 p-4 rounded-lg text-center">
+                                    <p className="text-sm text-gray-600">Total Producido</p>
+                                    <p className="text-3xl font-bold text-blue-700">
+                                        {produccionDelDia.reduce((sum, item) => sum + item.cantidad, 0)}
+                                    </p>
+                                </div>
+                                <div className="bg-red-50 p-4 rounded-lg text-center">
+                                    <p className="text-sm text-gray-600">Total Vendido</p>
+                                    <p className="text-3xl font-bold text-red-700">
+                                        {ventasDelDia.reduce((sum, item) => sum + item.cantidad, 0)}
+                                    </p>
+                                </div>
+                                <div className="bg-green-50 p-4 rounded-lg text-center">
+                                    <p className="text-sm text-gray-600">Registros</p>
+                                    <p className="text-3xl font-bold text-green-700">{historialFiltrado.length}</p>
+                                </div>
+                                <div className="bg-yellow-50 p-4 rounded-lg text-center">
+                                    <p className="text-sm text-gray-600">Trabajadores</p>
+                                    <p className="text-3xl font-bold text-yellow-700">
+                                        {new Set(produccionDelDia.map(p => p.trabajador)).size}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // VISTA: CONFIGURACIÓN
+        if (vista === 'configuracion') {
+            const stockValvulas = datos.valvulas.stock.toLocaleString();
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4">
+                    <CustomAlert {...mensajeAlerta} />
+                    <ConfirmationModal 
+                        show={confirmacion?.show}
+                        message={confirmacion?.message}
+                        onConfirm={confirmacion?.onConfirm}
+                        onCancel={() => setConfirmacion(null)}
+                    />
+                    <div className="max-w-4xl mx-auto">
+                        <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
+                            <h1 className="text-3xl font-bold text-gray-800">⚙️ Configuración y Administración</h1>
+                        </div>
+                        
+                        {/* Ajuste Global de Válvulas */}
+                        <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border-l-4 border-emerald-500">
+                            <h2 className="text-xl font-bold text-emerald-700 mb-4">⚙️ Stock Global de Válvulas</h2>
+                            <div className="flex justify-between items-center mb-4">
+                                <p className="text-lg font-medium text-gray-600">Stock Actual:</p>
+                                <p className="text-4xl font-extrabold text-emerald-600">{stockValvulas}</p>
+                            </div>
+                            <div className="mt-4 pt-4 border-t">
+                                <h3 className="text-lg font-semibold mb-2">Ajuste Manual de Stock</h3>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="number"
+                                        value={newValveStock}
+                                        onChange={(e) => setNewValveStock(e.target.value)}
+                                        placeholder="Nuevo stock total (ej: 10000)"
+                                        className="flex-1 p-3 border-2 border-gray-300 rounded-lg"
+                                    />
+                                    <button onClick={updateValveStock} className="bg-emerald-600 text-white px-6 rounded-lg font-bold hover:bg-emerald-700">
+                                        Actualizar
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 🔑 GESTIÓN DE CLAVES DE ACCESO (NUEVA SECCIÓN) */}
+                        <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border-l-4 border-red-500">
+                            <h2 className="text-xl font-bold text-red-700 mb-4">🔑 Gestión de Claves de Acceso</h2>
+                            <p className="text-sm text-gray-600 mb-4">Establece nuevas claves para el acceso general, reseteo y modo editor.</p>
+
+                            <div className="space-y-4">
+                                {/* CAMBIAR PIN DE ADMINISTRADOR */}
+                                <div className="p-3 bg-red-50 rounded-lg">
+                                    <p className="font-semibold text-red-800 mb-2">PIN Administrador (Acceso Total)</p>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="password"
+                                            value={nuevoAdminPin}
+                                            onChange={(e) => setNuevoAdminPin(e.target.value)}
+                                            placeholder={`Nuevo PIN (Actual: ${adminPin.substring(0, 1)}****)`}
+                                            maxLength="10"
+                                            className="flex-1 p-3 border-2 border-gray-300 rounded-lg"
+                                        />
+                                        <button
+                                            onClick={() => {
+                                                if (nuevoAdminPin.length >= 4) {
+                                                    actualizarConfiguracion({ adminPin: nuevoAdminPin });
+                                                    setNuevoAdminPin('');
+                                                } else {
+                                                    mostrarAlerta('El PIN debe ser de al menos 4 dígitos', 'error');
+                                                }
+                                            }}
+                                            disabled={nuevoAdminPin.length < 4}
+                                            className="bg-red-600 text-white px-6 rounded-lg font-bold hover:bg-red-700 disabled:bg-gray-400"
+                                        >
+                                            Cambiar
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* CAMBIAR CONTRASEÑA DE RESETEO */}
+                                <div className="p-3 bg-yellow-50 rounded-lg">
+                                    <p className="font-semibold text-yellow-800 mb-2">Contraseña Reseteo Diario</p>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="password"
+                                            value={nuevoResetPass}
+                                            onChange={(e) => setNuevoResetPass(e.target.value)}
+                                            placeholder={`Nueva Clave (Actual: ${resetPass.substring(0, 1)}****)`}
+                                            maxLength="10"
+                                            className="flex-1 p-3 border-2 border-gray-300 rounded-lg"
+                                        />
+                                        <button
+                                            onClick={() => {
+                                                if (nuevoResetPass.length >= 8) {
+                                                    actualizarConfiguracion({ resetPass: nuevoResetPass });
+                                                    setNuevoResetPass('');
+                                                } else {
+                                                    mostrarAlerta('La clave debe ser de al menos 8 caracteres', 'error');
+                                                }
+                                            }}
+                                            disabled={nuevoResetPass.length < 8}
+                                            className="bg-yellow-600 text-white px-6 rounded-lg font-bold hover:bg-yellow-700 disabled:bg-gray-400"
+                                        >
+                                            Cambiar
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                {/* CAMBIAR CONTRASEÑA DE EDITOR */}
+                                <div className="p-3 bg-orange-50 rounded-lg">
+                                    <p className="font-semibold text-orange-800 mb-2">Contraseña Modo Editor</p>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="password"
+                                            value={nuevoEditorPass}
+                                            onChange={(e) => setNuevoEditorPass(e.target.value)}
+                                            placeholder={`Nueva Clave (Actual: ${editorPass.substring(0, 1)}****)`}
+                                            maxLength="10"
+                                            className="flex-1 p-3 border-2 border-gray-300 rounded-lg"
+                                        />
+                                        <button
+                                            onClick={() => {
+                                                if (nuevoEditorPass.length >= 8) {
+                                                    actualizarConfiguracion({ editorPass: nuevoEditorPass });
+                                                    setNuevoEditorPass('');
+                                                } else {
+                                                    mostrarAlerta('La clave debe ser de al menos 8 caracteres', 'error');
+                                                }
+                                            }}
+                                            disabled={nuevoEditorPass.length < 8}
+                                            className="bg-orange-600 text-white px-6 rounded-lg font-bold hover:bg-orange-700 disabled:bg-gray-400"
+                                        >
+                                            Cambiar
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid md:grid-cols-2 gap-6">
+                            {/* Gestión de Trabajadores */}
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <h2 className="text-xl font-bold text-gray-800 mb-4">👥 Trabajadores</h2>
+                                <p className="text-sm text-gray-500 mb-4">Asigna el PIN de acceso a cada trabajador.</p>
+                                <div className="flex gap-2 mb-6">
+                                    <input 
+                                        type="text"
+                                        value={nuevoTrabajador}
+                                        onChange={(e) => setNuevoTrabajador(e.target.value)}
+                                        placeholder="Nombre completo"
+                                        className="flex-1 p-3 border-2 border-gray-300 rounded-lg"
+                                        onKeyPress={(e) => e.key === 'Enter' && agregarTrabajador()} 
+                                    />
+                                    <button onClick={() => agregarTrabajador()} className="bg-green-600 text-white px-6 rounded-lg font-bold hover:bg-green-700">
+                                        + Agregar
+                                    </button>
+                                </div>
+                                <div className="space-y-3">
+                                    {datos.trabajadores.map(t => (
+                                        <div key={t.nombre} className="bg-gray-50 p-4 rounded-lg border-l-4 border-green-500">
+                                            {editandoTrabajador === t.nombre ? (
+                                                <div className="flex flex-col gap-2">
+                                                    <input
+                                                        type="text"
+                                                        value={nombreEditado}
+                                                        onChange={(e) => setNombreEditado(e.target.value)}
+                                                        className="p-2 border-2 border-blue-400 rounded"
+                                                        autoFocus
+                                                        placeholder="Nuevo Nombre"
+                                                    />
+                                                    <input
+                                                        type="password"
+                                                        value={t.pin || ''}
+                                                        onChange={(e) => {
+                                                            const pin = e.target.value;
+                                                            const nuevosTrabajadores = datos.trabajadores.map(tr => 
+                                                                tr.nombre === t.nombre ? { ...tr, pin: pin } : tr
+                                                            );
+                                                            actualizarDatos({ ...datos, trabajadores: nuevosTrabajadores });
+                                                        }}
+                                                        className="p-2 border-2 border-blue-400 rounded"
+                                                        placeholder="PIN (4+ dígitos)"
+                                                    />
+                                                    <div className="flex gap-2 mt-2">
+                                                        <button
+                                                            onClick={() => editarTrabajador(t.nombre, nombreEditado, t.pin)}
+                                                            className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 font-bold"
+                                                        >
+                                                            Guardar
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setEditandoTrabajador(null)}
+                                                            className="bg-gray-400 text-white px-3 rounded hover:bg-gray-500"
+                                                        >
+                                                            ✗
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="flex justify-between items-center">
+                                                    <div className="flex flex-col">
+                                                        <span className="font-semibold">{t.nombre}</span>
+                                                        <span className={`text-xs font-bold ${t.deductValves ? 'text-emerald-500' : 'text-red-500'}`}>
+                                                            VÁLVULAS: {t.deductValves ? 'ACTIVA' : 'INACTIVA'}
+                                                        </span>
+                                                        <span className={`text-xs font-bold mt-1 ${t.pin ? 'text-blue-500' : 'text-red-500'}`}>
+                                                            PIN: {t.pin ? 'ASIGNADO' : 'PENDIENTE'}
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-2">
+                                                        <label className="relative inline-block w-12 h-6" title="Controla si resta válvulas">
+                                                            <input type="checkbox" checked={t.deductValves} onChange={() => toggleDeductValves(t.nombre)} className="toggle-checkbox" />
+                                                            <span className="toggle-label"></span>
+                                                        </label>
+
+                                                        <button
+                                                            onClick={() => {
+                                                                setEditandoTrabajador(t.nombre);
+                                                                setNombreEditado(t.nombre);
+                                                            }}
+                                                            className="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600"
+                                                        >
+                                                            ✏️
+                                                        </button>
+                                                        <button
+                                                            onClick={() => eliminarTrabajador(t.nombre)}
+                                                            className="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600"
+                                                        >
+                                                            🗑️
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            {/* Gestión de Marcas */}
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <h2 className="text-xl font-bold text-gray-800 mb-4">💧 Marcas</h2>
+                                <div className="flex gap-2 mb-6">
+                                    <input 
+                                        type="text"
+                                        value={nuevaMarca}
+                                        onChange={(e) => setNuevaMarca(e.target.value)}
+                                        placeholder="Nueva marca"
+                                        className="flex-1 p-3 border-2 border-gray-300 rounded-lg"
+                                        onKeyPress={(e) => e.key === 'Enter' && agregarMarca()}
+                                    />
+                                    <button onClick={agregarMarca} className="bg-blue-600 text-white px-6 rounded-lg font-bold hover:bg-blue-700">
+                                        + Agregar
+                                    </button>
+                                </div>
+                                <div className="grid gap-2">
+                                    {datos.marcas.map(m => (
+                                        <div key={m} className="bg-gradient-to-br from-blue-50 to-indigo-50 p-3 rounded-lg border-2 border-blue-200">
+                                            {editandoMarca === m ? (
+                                                <div className="flex gap-2">
+                                                    <input
+                                                        type="text"
+                                                        value={nombreEditado}
+                                                        onChange={(e) => setNombreEditado(e.target.value)}
+                                                        className="flex-1 p-2 border-2 border-blue-400 rounded"
+                                                        autoFocus
+                                                        onKeyPress={(e) => e.key === 'Enter' && editarMarca(m, nombreEditado)}
+                                                    />
+                                                    <button
+                                                        onClick={() => editarMarca(m, nombreEditado)}
+                                                        className="bg-blue-600 text-white px-3 rounded hover:bg-blue-700"
+                                                    >
+                                                        ✓
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            setEditandoMarca(null);
+                                                            setNombreEditado('');
+                                                        }}
+                                                        className="bg-gray-400 text-white px-3 rounded hover:bg-gray-500"
+                                                    >
+                                                        ✗
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="font-semibold text-blue-800">{m}</span>
+                                                        <div className="flex gap-2">
+                                                            <button
+                                                                onClick={() => {
+                                                                    setEditandoMarca(m);
+                                                                    setNombreEditado(m);
+                                                                }}
+                                                                className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600"
+                                                            >
+                                                                ✏️
+                                                            </button>
+                                                            <button
+                                                                onClick={() => eliminarMarca(m)}
+                                                                className="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600"
+                                                            >
+                                                                🗑️
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={() => setVista('admin')} className="mt-6 w-full bg-gray-600 text-white py-3 rounded-xl font-bold hover:bg-gray-700">
+                                🏠 Volver
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            // VISTA: MODO EDITOR
+            if (vista === 'editor') {
+                const movimientosEditables = (datos.historial || [])
+                    .filter(item => (item.tipo === 'produccion' || item.tipo === 'venta'))
+                    .slice().reverse();
+                
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 p-4">
+                        <CustomAlert {...mensajeAlerta} />
+                        <div className="max-w-4xl mx-auto">
+                            <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
+                                <div className="flex justify-between items-center">
+                                    <h1 className="text-3xl font-bold text-orange-700">✏️ Modo Editor Activo</h1>
+                                    <button 
+                                        onClick={() => {
+                                            setModoEditor(false);
+                                            setVista('admin');
+                                            setMovimientoAEditar(null);
+                                            setNuevaCantidadEdicion('');
+                                        }} 
+                                        className="bg-red-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-600"
+                                    >
+                                        ✖ Salir
+                                    </button>
+                                </div>
+                                <p className="text-gray-600 mt-2">Selecciona un movimiento para corregir su cantidad</p>
+                            </div>
+
+                            {movimientoAEditar ? (
+                                <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border-l-4 border-orange-500">
+                                    <h2 className="text-xl font-bold text-gray-800 mb-4">Modificar Movimiento (ID: {movimientoAEditar.id})</h2>
+                                    <div className="space-y-3">
+                                        <p><strong>Tipo:</strong> <span className={`font-semibold ${movimientoAEditar.tipo === 'produccion' ? 'text-green-600' : 'text-red-600'}`}>{movimientoAEditar.tipo.toUpperCase()}</span></p>
+                                        <p><strong>Marca:</strong> {movimientoAEditar.marca}</p>
+                                        {movimientoAEditar.trabajador && <p><strong>Trabajador:</strong> {movimientoAEditar.trabajador}</p>}
+                                        {movimientoAEditar.tipo === 'produccion' && (
+                                            <p><strong>Afecta Válvulas:</strong> <span className={`font-semibold ${movimientoAEditar.deductValves ? 'text-emerald-600' : 'text-red-600'}`}>{movimientoAEditar.deductValves ? 'SI' : 'NO'}</span></p>
+                                        )}
+                                        <p><strong>Cantidad Actual:</strong> <span className="text-2xl font-bold">{movimientoAEditar.cantidad}</span> bolsas</p>
+                                        
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-700 mb-2">Nueva Cantidad</label>
+                                            <input
+                                                type="number"
+                                                value={nuevaCantidadEdicion}
+                                                onChange={(e) => setNuevaCantidadEdicion(e.target.value)}
+                                                placeholder="Cantidad correcta"
+                                                className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-orange-500 focus:outline-none text-lg"
+                                            />
+                                        </div>
+                                        <div className="flex gap-4 pt-4">
+                                            <button 
+                                                onClick={() => setMovimientoAEditar(null)}
+                                                className="flex-1 bg-gray-400 text-white py-3 rounded-lg font-bold hover:bg-gray-500"
+                                            >
+                                                Cancelar
+                                            </button>
+                                            <button 
+                                                onClick={editarMovimiento}
+                                                disabled={!nuevaCantidadEdicion || parseInt(nuevaCantidadEdicion) === movimientoAEditar.cantidad}
+                                                className="flex-1 bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700 disabled:bg-gray-400"
+                                            >
+                                                Guardar
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="bg-white rounded-xl shadow-lg p-6">
+                                    <h2 className="text-xl font-bold text-gray-800 mb-4">Movimientos Recientes ({movimientosEditables.length})</h2>
+                                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                                        {movimientosEditables.map((item) => (
+                                            <div key={item.id} className={`p-4 rounded-lg border-l-4 shadow-sm flex justify-between items-center ${
+                                                item.tipo === 'produccion' ? 'bg-green-50 border-green-500' : 'bg-red-50 border-red-500'
+                                            }`}>
+                                                <div>
+                                                    <p className="font-bold text-sm text-gray-800">
+                                                        {item.tipo === 'produccion' ? '✓ Producción' : '✗ Venta'} - {item.marca}
+                                                        {item.editado && <span className="text-xs text-yellow-600 ml-2">(EDITADO)</span>}
+                                                    </p>
+                                                    {item.trabajador && <p className="text-xs text-gray-600 mt-1">👤 {item.trabajador}</p>}
+                                                    {item.tipo === 'produccion' && (
+                                                        <p className={`text-xs mt-1 font-semibold ${item.deductValves ? 'text-emerald-500' : 'text-red-500'}`}>
+                                                            Válvulas: {item.deductValves ? 'Deducidas' : 'Ignoradas'}
+                                                        </p>
+                                                    )}
+                                                    <p className="text-xs text-gray-500 mt-1">🕐 {formatearFecha(item.fecha)}</p>
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="text-right">
+                                                        <p className="text-xl font-bold text-gray-800">{item.cantidad}</p>
+                                                        <p className="text-xs text-gray-500">bolsas</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => {
+                                                            setMovimientoAEditar(item);
+                                                            setNuevaCantidadEdicion(item.cantidad.toString());
+                                                        }}
+                                                        className="bg-blue-500 text-white p-3 rounded-full hover:bg-blue-600"
+                                                        title="Editar Cantidad"
+                                                    >
+                                                        ✏️
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {movimientosEditables.length === 0 && (
+                                            <div className="text-center py-8 text-gray-400">
+                                                <p className="text-lg">📝 No hay movimientos editables</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            // VISTA: ADMINISTRADOR (Panel Principal)
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+                    <CustomAlert {...mensajeAlerta} />
+                    {renderModals()}
+                    <ConfirmationModal 
+                        show={confirmacion?.show}
+                        message={confirmacion?.message}
+                        onConfirm={confirmacion?.onConfirm}
+                        onCancel={() => setConfirmacion(null)}
+                    />
+
+                    <div className="max-w-7xl mx-auto">
+                        <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                <div>
+                                    <h1 className="text-3xl font-bold text-gray-800 mb-2">📦 Sistema de Inventario</h1>
+                                    <div className="flex items-center gap-2">
+                                        <div className={`w-3 h-3 rounded-full ${conectado ? 'bg-green-500' : 'bg-red-500'} animate-pulse`}></div>
+                                        <span className="text-sm font-semibold text-gray-600">
+                                            {conectado ? '✓ Conectado a Firebase' : '✗ Sin conexión'}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="flex flex-wrap gap-3">
+                                    <button onClick={cerrarSesion} className="bg-red-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-700 shadow-lg">
+                                        🔒 Cerrar Sesión
+                                    </button>
+                                    <button onClick={() => setMostrarModalEditor(true)} className="bg-orange-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-700 shadow-lg">
+                                        ✏️ Editor
+                                    </button>
+                                    <button onClick={() => setVista('calendario')} className="bg-orange-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-700 shadow-lg">
+                                        📅 Calendario
+                                    </button>
+                                    <button onClick={() => setMostrarModalReset(true)} className="bg-red-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-700 shadow-lg">
+                                        🔄 Reset
+                                    </button>
+                                    <button onClick={() => setVista('trabajador')} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 shadow-lg">
+                                        👥 Vista Trabajador
+                                    </button>
+                                    <button onClick={() => setVista('configuracion')} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-purple-700 shadow-lg">
+                                        ⚙️ Config
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Dashboard Cards */}
+                        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+                            <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-emerald-500 col-span-2">
+                                <p className="text-xs text-gray-600 font-semibold mb-1">Stock de Válvulas</p>
+                                <p className="text-3xl font-bold text-emerald-700">{datos.valvulas.stock.toLocaleString()}</p>
+                                <p className="text-xs text-gray-500 mt-1">unidades disponibles</p>
+                            </div>
+                            <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-blue-500">
+                                <p className="text-xs text-gray-600 font-semibold mb-1">Total Producido</p>
+                                <p className="text-3xl font-bold text-blue-700">{totalProducido.toLocaleString()}</p>
+                                <p className="text-xs text-gray-500 mt-1">bolsas</p>
+                            </div>
+                            <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-red-500">
+                                <p className="text-xs text-gray-600 font-semibold mb-1">Total Vendido</p>
+                                <p className="text-3xl font-bold text-red-700">{totalVendido.toLocaleString()}</p>
+                                <p className="text-xs text-gray-500 mt-1">bolsas</p>
+                            </div>
+                            <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-yellow-500">
+                                <p className="text-xs text-gray-600 font-semibold mb-1">Fecha Actual</p>
+                                <p className="text-lg font-bold text-yellow-700">{new Date().toLocaleDateString('es-ES')}</p>
+                                <p className="text-xs text-gray-500 mt-1">{new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute: '2-digit'})}</p>
+                            </div>
+                        </div>
+
+                        {/* Registrar Ventas */}
+                        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">📻 Registrar Ventas del Día</h2>
+                            <div className="grid md:grid-cols-3 gap-4">
+                                <select value={marcaVenta} onChange={(e) => setMarcaVenta(e.target.value)} className="p-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:outline-none font-medium">
+                                    <option value="">-- Seleccionar marca --</option>
+                                    {datos.marcas.map(m => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                                <input 
+                                    type="number"
+                                    value={cantidadVenta}
+                                    onChange={(e) => setCantidadVenta(e.target.value)}
+                                    placeholder="Cantidad vendida"
+                                    className="p-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:outline-none"
+                                    onKeyPress={(e) => e.key === 'Enter' && registrarVenta()}
+                                />
+                                <button 
+                                    onClick={registrarVenta}
+                                    disabled={!marcaVenta || !cantidadVenta || parseInt(cantidadVenta) <= 0}
+                                    className="bg-red-600 text-white py-3 rounded-lg font-bold hover:bg-red-700 shadow-lg disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    Registrar Venta
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Inventario Actual por Marca */}
+                        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">📊 Inventario Actual por Marca</h2>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                {datos.marcas.map(marca => (
+                                    <div key={marca} className="bg-gradient-to-br from-blue-50 to-indigo-50 p-4 rounded-lg border-2 border-blue-300 shadow-md">
+                                        <p className="text-sm font-semibold text-gray-600">{marca}</p>
+                                        <p className="text-3xl font-bold text-blue-700">{inventarioTotal[marca] || 0}</p>
+                                        <p className="text-xs text-gray-500">bolsas disponibles</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Producción por Trabajador */}
+                        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">👷 Producción por Trabajador</h2>
+                            <div className="space-y-3">
+                                {datos.trabajadores.map(trabajador => (
+                                    <div key={trabajador.nombre} className="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-300 transition-all">
+                                        <h3 className="font-bold text-lg text-gray-800 mb-3 flex items-center gap-2">
+                                            <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm">
+                                                {trabajador.nombre}
+                                            </span>
+                                            <span className="text-sm text-gray-500">
+                                                ({Object.values(trabajador.produccion || {}).reduce((a, b) => a + b, 0)} bolsas totales)
+                                            </span>
+                                            <span className={`text-xs font-bold ${trabajador.deductValves ? 'text-emerald-500' : 'text-red-500'} ml-2`}>
+                                                VÁLVULAS: {trabajador.deductValves ? 'SI' : 'NO'}
+                                            </span>
+                                        </h3>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                            {Object.entries(trabajador.produccion || {}).map(([marca, cant]) => (
+                                                <div key={marca} className="bg-gray-50 p-3 rounded border-l-4 border-blue-500">
+                                                    <p className="text-xs text-gray-600 font-medium">{marca}</p>
+                                                    <p className="text-lg font-bold text-gray-800">{cant}</p>
+                                                </div>
+                                            ))}
+                                            {Object.keys(trabajador.produccion || {}).length === 0 && (
+                                                <p className="col-span-full text-gray-400 text-sm text-center py-2">Sin producción registrada</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Historial Reciente */}
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                📅 Historial de Movimientos Recientes
+                                <span className="text-sm font-normal text-gray-500">
+                                    ({(datos.historial || []).length} registros totales, mostrando los últimos 20)
+                                </span>
+                            </h2>
+                            <div className="space-y-2 max-h-96 overflow-y-auto">
+                                {(datos.historial || []).slice().reverse().slice(0, 20).map((item, idx) => (
+                                    <div key={idx} className={`p-4 rounded-lg border-l-4 shadow-sm ${
+                                        item.tipo === 'produccion' ? 'bg-green-50 border-green-500' : 
+                                        item.tipo === 'venta' ? 'bg-red-50 border-red-500' : 
+                                        item.tipo === 'edicion' ? 'bg-yellow-50 border-yellow-500' :
+                                        'bg-gray-50 border-gray-500'
+                                    }`}>
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <p className="font-bold text-sm text-gray-800">
+                                                    {item.tipo === 'produccion' ? '✓ Producción' : 
+                                                    item.tipo === 'venta' ? '✗ Venta' : 
+                                                    item.tipo === 'edicion' ? '✏️ Edición' : 
+                                                    '🔄 Reset'} {item.marca ? `- ${item.marca}` : ''}
+                                                </p>
+                                                {item.trabajador && <p className="text-xs text-gray-600 mt-1">👤 {item.trabajador}</p>}
+                                                {item.descripcion && <p className="text-xs text-gray-600 mt-1">{item.descripcion}</p>}
+                                                {item.editado && item.tipo !== 'edicion' && <p className="text-xs text-orange-600 mt-1 font-semibold">EDITADO</p>}
+                                                <p className="text-xs text-gray-500 mt-1">🕐 {formatearFecha(item.fecha)}</p>
+                                            </div>
+                                            {item.cantidad && item.tipo !== 'edicion' && (
+                                                <div className="text-right">
+                                                    <p className="text-2xl font-bold text-gray-800">{item.cantidad}</p>
+                                                    <p className="text-xs text-gray-500">bolsas</p>
+                                                </div>
+                                            )}
+                                            {item.nuevaCantidad && item.tipo === 'edicion' && (
+                                                <div className="text-right">
+                                                    <p className="text-xl font-bold text-gray-800">Nuevo: {item.nuevaCantidad}</p>
+                                                    <p className="text-xs text-gray-500">Anterior: {item.movimientoOriginal.cantidad}</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                                {(datos.historial || []).length === 0 && (
+                                    <div className="text-center py-8 text-gray-400">
+                                        <p className="text-lg">📝 No hay movimientos registrados aún</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Renderiza el componente principal en el DOM
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
